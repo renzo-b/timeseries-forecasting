@@ -24,10 +24,12 @@ def cross_validate(ts, model, n_splits: int, test_size: int, gap: int = 0):
     splitter = TimeSeriesSplit(n_splits=n_splits, test_size=test_size, gap=gap)
     cv_results = []
 
+    # split into train and test
     for train_index, test_index in splitter.split(ts):
+        # fit using only training data
         model.fit(ts.iloc[train_index])
-        y_hat = model.predict(ts.iloc[train_index])
-        y_true = ts[test_index]
+        y_hat = model.predict()  # prediction
+        y_true = ts[test_index]  # actual
 
         # make a dataframe of results for this loop
         df_loop = pd.concat([y_hat, y_true], axis=1)
@@ -36,7 +38,7 @@ def cross_validate(ts, model, n_splits: int, test_size: int, gap: int = 0):
         df_loop["future dates"] = ts.index[test_index]
         cv_results.append(df_loop.reset_index(drop=True))
 
-    # concatenate all the results
+    # concatenate all the results into a single dataframe
     cv_results = pd.concat(cv_results, axis=0)
 
     print(cv_results)
