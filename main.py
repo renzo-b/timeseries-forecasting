@@ -16,7 +16,7 @@ from utils import *
 
 # cv_results = cross_validate(ts, model=model, n_splits=3, test_size=3,)
 
-model = ModelLSTM(3, 1, 3, 2000, 0.01)
+model = ModelLSTM(3, 3, 1, 3, 2000, 0.01)
 numdays = 100
 data_range = np.arange(numdays)
 datetimes = [datetime(2020, 1, 1) + timedelta(days=x) for x in range(numdays)]

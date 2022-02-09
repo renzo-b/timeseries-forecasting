@@ -1,6 +1,7 @@
 from pandas import to_timedelta
 from statsmodels.tsa.arima.model import ARIMA
 import numpy as np
+import pandas as pd
 
 import torch
 import torch.nn as nn
@@ -41,9 +42,10 @@ class ClassLSTM(nn.Module):
     libraries
     """
 
-    def __init__(self, input_size, hidden_size, num_layers):
+    def __init__(self, input_size, output_size, hidden_size, num_layers):
         super(ClassLSTM, self).__init__()
         self.input_size = input_size
+        self.output_size = output_size
         self.hidden_size = hidden_size
         self.num_layers = num_layers
 
@@ -53,7 +55,7 @@ class ClassLSTM(nn.Module):
             num_layers=num_layers,
             batch_first=True,
         )
-        self.fc = nn.Linear(hidden_size, 1)
+        self.fc = nn.Linear(hidden_size, output_size)
 
     def forward(self, x):
         h_0 = Variable(torch.zeros(self.num_layers, x.size(0), self.hidden_size))
@@ -67,14 +69,16 @@ class ClassLSTM(nn.Module):
 
         out = self.fc(h_out)
 
-        return out
+        return out[:,None]
 
 
 class ModelLSTM:
-    def __init__(self, seq_length, input_size, hidden_size, num_epochs, learning_rate):
+    def __init__(self, input_length, output_length, input_size, hidden_size, num_epochs, learning_rate):
         self.lstm = None
-        self.train = None
-        self.seq_length = seq_length
+        self.ts = None
+        self.scaler = None
+        self.input_length = input_length
+        self.output_length = output_length
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.num_epochs = num_epochs
@@ -82,18 +86,19 @@ class ModelLSTM:
 
     def fit(self, ts):
         """ts: pd.Series"""
-        scaler = StandardScaler()
-        x = scaler.fit_transform(ts.values.reshape(-1, 1))
+        self.ts = ts
+        self.scaler = StandardScaler()
+        x = self.scaler.fit_transform(self.ts.values.reshape(-1, 1))
 
-        train, test = sliding_windows(x, self.seq_length)
+        train, test = sliding_windows(x, self.input_length, self.output_length)
 
         # convert to tensors
-        train = Variable(torch.Tensor(np.array(train)))
-        test = Variable(torch.Tensor(np.array(test)))
+        train = torch.tensor(np.array(train), dtype=torch.float)
+        test = torch.tensor(np.array(test), dtype=torch.float)
 
         self.train = train
 
-        self.lstm = ClassLSTM(self.input_size, self.hidden_size, 1)
+        self.lstm = ClassLSTM(self.input_size, self.output_length, self.hidden_size, 1)
         criterion = torch.nn.MSELoss()
         optimizer = torch.optim.Adam(self.lstm.parameters(), lr=self.learning_rate)
 
@@ -110,34 +115,61 @@ class ModelLSTM:
                 print("Epoch: %d, loss: %1.5f" % (epoch, loss.item()))
 
     def predict(self):
-        return self.lstm(self.train)
+        x = self.scaler.transform(self.ts.values.reshape(-1, 1))
+        x = x[-self.input_length:]  # get the input sequence
+        x = torch.tensor(np.array([x]), dtype=torch.float)
+
+        y = self.lstm(x)  # predict
+        prediction = self.scaler.inverse_transform(y.detach().numpy().reshape(-1, 1)).reshape(-1)  # unscale
+
+        freq = pd.infer_freq(self.ts.index)
+
+        if freq is None:
+            raise ValueError(
+                "Could not infer frequency from Datetime. Consider resampling the df"
+            )
+
+        if freq[0] not in "0123456789":  # add a digit for pd.to_timedelta to work
+            freq = f"1{freq}"
+
+        self.resample_slide = freq
+
+        idx = [
+            self.ts.index[-1] + N * to_timedelta(self.resample_slide)
+            for N in range(1, len(prediction) + 1)
+        ]
+
+        return pd.Series(data=prediction, index=idx)
 
 
-def sliding_windows(data, seq_length):
+def sliding_windows(data, input_length, output_length):
     """
     Inputs
     ------
     data: array of shape (n_samples, 1)
         data to split
     
-    seq_length: int
-        length of sequence
+    input_length: int
+        length of input sequence
+
+    output_length; int
+        length of output sequence
 
     Returns
     -------
-    train: array of shape (n_sequences, seq_length, 1)
+    train: array 
         training data
     
-    test: array of shape (n_sequences, 1)
+    test: array 
         test data
     """
     x = []
     y = []
 
-    for i in range(len(data) - seq_length - 1):
-        _x = data[i : (i + seq_length)]
-        _y = data[i + seq_length]
+    for i in range(len(data)-input_length-output_length+1):
+        _x = data[i:(i+input_length)]
+        _y = data[(i+input_length):(i+input_length+output_length)]
         x.append(_x)
         y.append(_y)
 
-    return np.array(x), np.array(y)
+    return np.array(x),np.array(y)
