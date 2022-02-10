@@ -1,15 +1,35 @@
-from pandas import to_timedelta
-from statsmodels.tsa.arima.model import ARIMA
 import numpy as np
 import pandas as pd
-
 import torch
 import torch.nn as nn
-from torch.autograd import Variable
+from pandas import to_timedelta
 from sklearn.preprocessing import StandardScaler
+from statsmodels.tsa.arima.model import ARIMA
+from torch.autograd import Variable
 
 
-class ModelARIMA:
+class BaseModel:
+    """Base forecasting class"""
+    def __init__(self):
+        self.resample_slide = None
+
+    def infer_freq(self, ts):
+        """infers frequency of timeseries"""
+        freq = pd.infer_freq(ts.index)
+
+        if freq is None:
+            raise ValueError(
+                "Could not infer frequency from Datetime. Consider resampling the df"
+            )
+
+        if freq[0] not in "0123456789":  # add a digit for pd.to_timedelta to work
+            freq = f"1{freq}"
+
+        self.resample_slide = freq
+
+        return self.resample_slide
+
+class ModelARIMA(BaseModel):
     """Wrapper around statsmodels ARIMA for compatibility with models from other 
     libraries
     """
@@ -22,17 +42,20 @@ class ModelARIMA:
         self.start = None
         self.end = None
 
-    def fit(self, x):
+    def fit(self, ts):
         """
-        x: array or pd.Series
+        ts: array or pd.Series
             Input time series data
         """
-        self.fitted_model = ARIMA(endog=x, order=self.order, freq=self.freq).fit()
-        self.start = x.index[-1] + to_timedelta(self.freq)
-        self.end = x.index[-1] + to_timedelta(self.horizon)
+        self.fitted_model = ARIMA(endog=ts, order=self.order, freq=self.freq).fit()
+        self.start = ts.index[-1] + to_timedelta(self.freq)
+        self.end = ts.index[-1] + to_timedelta(self.horizon)
 
-    def predict(self):
-        """Performs and returns prediction"""
+    def predict(self, ts=None):
+        """
+        Performs and returns predictions
+        ts: input timeseries. Not used in this method. Included for consistency.
+        """           
         prediction = self.fitted_model.predict(start=self.start, end=self.end)
         return prediction
 
@@ -69,13 +92,12 @@ class ClassLSTM(nn.Module):
 
         out = self.fc(h_out)
 
-        return out[:,None]
+        return torch.transpose(out[:,None], 1, 2)
 
 
-class ModelLSTM:
+class ModelLSTM(BaseModel):
     def __init__(self, input_length, output_length, input_size, hidden_size, num_epochs, learning_rate):
         self.lstm = None
-        self.ts = None
         self.scaler = None
         self.input_length = input_length
         self.output_length = output_length
@@ -85,18 +107,18 @@ class ModelLSTM:
         self.learning_rate = learning_rate
 
     def fit(self, ts):
-        """ts: pd.Series"""
-        self.ts = ts
+        """
+        ts: array or pd.Series
+            Input time series data
+        """        
         self.scaler = StandardScaler()
-        x = self.scaler.fit_transform(self.ts.values.reshape(-1, 1))
+        x = self.scaler.fit_transform(ts.values.reshape(-1, 1))
 
         train, test = sliding_windows(x, self.input_length, self.output_length)
 
         # convert to tensors
         train = torch.tensor(np.array(train), dtype=torch.float)
         test = torch.tensor(np.array(test), dtype=torch.float)
-
-        self.train = train
 
         self.lstm = ClassLSTM(self.input_size, self.output_length, self.hidden_size, 1)
         criterion = torch.nn.MSELoss()
@@ -114,28 +136,23 @@ class ModelLSTM:
             if epoch % 100 == 0:
                 print("Epoch: %d, loss: %1.5f" % (epoch, loss.item()))
 
-    def predict(self):
-        x = self.scaler.transform(self.ts.values.reshape(-1, 1))
+    def predict(self, ts):
+        """
+        Performs and returns predictions
+        ts: array or pd.Series
+            Input time series data
+        """      
+        x = self.scaler.transform(ts.values.reshape(-1, 1))
         x = x[-self.input_length:]  # get the input sequence
         x = torch.tensor(np.array([x]), dtype=torch.float)
+
+        resample_slide = self.infer_freq(ts)
 
         y = self.lstm(x)  # predict
         prediction = self.scaler.inverse_transform(y.detach().numpy().reshape(-1, 1)).reshape(-1)  # unscale
 
-        freq = pd.infer_freq(self.ts.index)
-
-        if freq is None:
-            raise ValueError(
-                "Could not infer frequency from Datetime. Consider resampling the df"
-            )
-
-        if freq[0] not in "0123456789":  # add a digit for pd.to_timedelta to work
-            freq = f"1{freq}"
-
-        self.resample_slide = freq
-
         idx = [
-            self.ts.index[-1] + N * to_timedelta(self.resample_slide)
+            ts.index[-1] + N * to_timedelta(resample_slide)
             for N in range(1, len(prediction) + 1)
         ]
 
