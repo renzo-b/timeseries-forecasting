@@ -1,7 +1,7 @@
 import pandas as pd
 
 
-def cross_validate(ts, model, splitter):
+def cross_validate(ts, label_columns, model, splitter):
     """Cross validates timeseries data 
     
     Inputs
@@ -9,11 +9,11 @@ def cross_validate(ts, model, splitter):
     ts: array
         timeseries data
     
-    n_splits: int
+    label_columns: list
 
-    test_size: int
+    model
 
-    gap:  int
+    splitter
 
     Returns
     -------
@@ -25,7 +25,7 @@ def cross_validate(ts, model, splitter):
     # split into train and validation
     for train_index, validate_index in splitter.split(ts):
         # fit using only training data
-        model.fit(ts.iloc[train_index])
+        model.fit(ts.iloc[train_index], label_columns)
         y_hat = model.predict()  # prediction
         y_true = ts[validate_index]  # actual
 

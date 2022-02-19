@@ -1,7 +1,8 @@
 import pandas as pd
 import streamlit as st
 
-from models import *
+from models.arima import ModelARIMA
+from models.pytorch_models import ModelLSTM
 from plots import *
 
 input_data = None
