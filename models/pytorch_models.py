@@ -31,7 +31,6 @@ class ClassLSTM(nn.Module):
 
     def forward(self, x):
         h_0 = Variable(torch.zeros(self.num_layers, x.size(0), self.hidden_size))
-
         c_0 = Variable(torch.zeros(self.num_layers, x.size(0), self.hidden_size))
 
         # Propagate input through LSTM
@@ -53,6 +52,7 @@ class ModelLSTM(BaseModel):
         hidden_size,
         num_epochs,
         learning_rate,
+        num_layers=1,
     ):
         self.lstm = None
         self.scaler = None
@@ -60,6 +60,7 @@ class ModelLSTM(BaseModel):
         self.output_length = output_length
         self.input_size = input_size
         self.hidden_size = hidden_size
+        self.num_layers = num_layers
         self.num_epochs = num_epochs
         self.learning_rate = learning_rate
         self.window_splitter = None
@@ -70,14 +71,22 @@ class ModelLSTM(BaseModel):
         input_data: pd.DataFrame
             Input time series data
         """
-        self.window_splitter = WindowManager(self.input_length, self.output_length, 0)
+        self.window_splitter = WindowManager(
+            self.input_length, self.output_length, 0, True
+        )
         self.label_columns = label_columns
 
         X, Y = self.window_splitter.get_training_windows(
             input_data, label_columns=label_columns
         )
 
-        self.lstm = ClassLSTM(self.input_size, self.output_length, self.hidden_size, 1)
+        self.lstm = ClassLSTM(
+            input_size=X.shape[2],
+            output_size=Y.shape[1],
+            hidden_size=self.hidden_size,
+            num_layers=self.num_layers,
+        )
+
         criterion = torch.nn.MSELoss()
         optimizer = torch.optim.Adam(self.lstm.parameters(), lr=self.learning_rate)
 
@@ -86,7 +95,6 @@ class ModelLSTM(BaseModel):
             optimizer.zero_grad()
 
             loss = criterion(outputs, Y)
-
             loss.backward()
 
             optimizer.step()
@@ -103,16 +111,13 @@ class ModelLSTM(BaseModel):
 
         X = self.window_splitter.get_prediction_window(input_data, self.label_columns)
 
-        y = self.lstm(X)  # predict
-        prediction = self.scaler.inverse_transform(
-            y.detach().numpy().reshape(-1, 1)
-        ).reshape(
-            -1
-        )  # unscale
+        Y = self.lstm(X)  # prediction still as 3 dimensional tensor
+
+        prediction = Y[0].detach().numpy()
 
         idx = [
             input_data.index[-1] + N * pd.to_timedelta(resample_slide)
             for N in range(1, len(prediction) + 1)
         ]
 
-        return pd.Series(data=prediction, index=idx)
+        return pd.DataFrame(data=prediction, columns=self.label_columns, index=idx)

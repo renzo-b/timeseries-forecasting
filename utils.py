@@ -26,8 +26,8 @@ def cross_validate(ts, label_columns, model, splitter):
     for train_index, validate_index in splitter.split(ts):
         # fit using only training data
         model.fit(ts.iloc[train_index], label_columns)
-        y_hat = model.predict()  # prediction
-        y_true = ts[validate_index]  # actual
+        y_hat = model.predict(ts.iloc[train_index])  # prediction
+        y_true = ts.iloc[validate_index]  # actual
 
         # make a dataframe of results for this loop
         df_loop = pd.concat([y_hat, y_true], axis=1)
